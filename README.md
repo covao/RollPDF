@@ -3,8 +3,10 @@
 ## Overview
 RollPDF is a single-file horizontal PDF viewer with smooth drag-inertia scrolling, designed for reading manga, comics, and multi-page documents.
 
+![RollPDF Demo](./RollPDF_demo.gif)
+
 ## Quick Start
-https://covao.github.io/RollPDF/RollPDF.html
+[Star RollPDF Demo](https://covao.github.io/RollPDF/RollPDF.html?pdf=https://raw.githubusercontent.com/covao/RollPDF/main/RollPDF_sample.pdf)
 
 ## Features
 - **Drag & drop** — open a PDF by dropping it onto the page or via the Open button
