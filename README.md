@@ -6,7 +6,7 @@ RollPDF is a single-file horizontal PDF viewer with smooth drag-inertia scrollin
 ![RollPDF Demo](./RollPDF_demo.gif)
 
 ## Quick Start
-[Star RollPDF Demo](https://covao.github.io/RollPDF/RollPDF.html?pdf=https://raw.githubusercontent.com/covao/RollPDF/main/RollPDF_sample.pdf)
+[Start RollPDF Demo](https://covao.github.io/RollPDF/RollPDF.html?pdf=https://raw.githubusercontent.com/covao/RollPDF/main/RollPDF_sample.pdf)
 
 ## Features
 - **Drag & drop** — open a PDF by dropping it onto the page or via the Open button
