@@ -1,0 +1,858 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>RollPDF</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@300;400;500&family=Syne:wght@700;800&display=swap" rel="stylesheet">
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  :root {
+    --bg: #0f0f11;
+    --surface: #18181c;
+    --surface2: #222228;
+    --border: #2e2e38;
+    --amber: #f5a623;
+    --amber-dim: #c4841b;
+    --amber-glow: rgba(245,166,35,0.12);
+    --text: #e8e6e0;
+    --text-dim: #7a7880;
+    --text-muted: #4a4852;
+    --radius: 3px;
+    --toolbar-h: 52px;
+  }
+
+  html, body {
+    width: 100%; height: 100%;
+    background: var(--bg);
+    color: var(--text);
+    font-family: 'DM Mono', monospace;
+    font-size: 13px;
+    overflow: hidden;
+    user-select: none;
+  }
+
+  /* ── TOOLBAR ─────────────────────────────── */
+  #toolbar {
+    position: fixed; top: 0; left: 0; right: 0;
+    height: var(--toolbar-h);
+    background: var(--surface);
+    border-bottom: 1px solid var(--border);
+    display: flex; align-items: center; gap: 6px;
+    padding: 0 16px;
+    z-index: 100;
+    transition: transform 0.25s cubic-bezier(0.4,0,0.2,1), opacity 0.25s ease;
+  }
+  body.is-fullscreen #toolbar {
+    transform: translateY(-100%);
+    opacity: 0;
+    pointer-events: none;
+    background: rgba(24,24,28,0.92);
+    backdrop-filter: blur(12px);
+    border-bottom-color: rgba(46,46,56,0.6);
+    box-shadow: 0 4px 24px rgba(0,0,0,0.5);
+  }
+  body.is-fullscreen.toolbar-visible #toolbar {
+    transform: translateY(0);
+    opacity: 1;
+    pointer-events: all;
+  }
+  #toolbar-trigger {
+    display: none;
+    position: fixed; top: 0; left: 0; right: 0;
+    height: 20px; z-index: 99;
+  }
+  body.is-fullscreen #toolbar-trigger { display: block; }
+  body.is-fullscreen #viewer.visible  { top: 0; }
+
+  .tb-logo {
+    font-family: 'Syne', sans-serif;
+    font-weight: 800; font-size: 16px;
+    color: var(--amber);
+    letter-spacing: -0.5px;
+    margin-right: 8px;
+    white-space: nowrap;
+  }
+  .tb-sep { width: 1px; height: 24px; background: var(--border); margin: 0 6px; }
+  .tb-info {
+    color: var(--text-dim); font-size: 11px;
+    white-space: nowrap; overflow: hidden;
+    text-overflow: ellipsis; max-width: 220px;
+  }
+  .tb-info span { color: var(--text); }
+  .tb-spacer { flex: 1; }
+
+  .btn {
+    display: flex; align-items: center; gap: 5px;
+    padding: 5px 10px;
+    background: var(--surface2);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    color: var(--text-dim);
+    font-family: 'DM Mono', monospace; font-size: 11px;
+    cursor: pointer; transition: all 0.15s; white-space: nowrap;
+  }
+  .btn:hover  { border-color: var(--amber-dim); color: var(--text); }
+  .btn.active { background: var(--amber-glow); border-color: var(--amber); color: var(--amber); }
+  .btn svg    { width: 13px; height: 13px; flex-shrink: 0; }
+
+  .zoom-display {
+    padding: 5px 8px;
+    background: var(--surface2);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    color: var(--amber); font-size: 11px;
+    min-width: 56px; text-align: center;
+  }
+
+  /* ── DROP ZONE ───────────────────────────── */
+  #drop-zone {
+    position: fixed; inset: 0;
+    display: flex; flex-direction: column;
+    align-items: center; justify-content: center; gap: 16px;
+    background: var(--bg); z-index: 50;
+    transition: background 0.2s;
+  }
+  #drop-zone.drag-over { background: rgba(245,166,35,0.04); }
+  #drop-zone.hidden    { display: none; }
+
+  .drop-icon {
+    width: 72px; height: 72px;
+    border: 2px solid var(--border); border-radius: 8px;
+    display: flex; align-items: center; justify-content: center;
+    transition: border-color 0.2s;
+  }
+  #drop-zone.drag-over .drop-icon     { border-color: var(--amber); }
+  .drop-icon svg                       { width: 32px; height: 32px; color: var(--text-muted); }
+  #drop-zone.drag-over .drop-icon svg { color: var(--amber); }
+
+  .drop-title { font-family: 'Syne', sans-serif; font-weight: 800; font-size: 22px; color: var(--text); letter-spacing: -0.5px; }
+  .drop-sub   { font-size: 11px; color: var(--text-muted); text-align: center; line-height: 1.7; }
+
+  .drop-btn {
+    margin-top: 4px; padding: 8px 20px;
+    background: transparent; border: 1px solid var(--border); border-radius: var(--radius);
+    color: var(--text-dim); font-family: 'DM Mono', monospace; font-size: 12px;
+    cursor: pointer; transition: all 0.15s;
+  }
+  .drop-btn:hover { border-color: var(--amber); color: var(--amber); }
+
+  #file-input { display: none; }
+
+  #drag-overlay {
+    position: fixed; inset: 0; margin: 12px;
+    border: 2px dashed var(--amber); border-radius: 6px;
+    pointer-events: none; opacity: 0; transition: opacity 0.15s; z-index: 200;
+  }
+  #drag-overlay.visible { opacity: 1; }
+
+  /* ── VIEWER ──────────────────────────────── */
+  #viewer {
+    position: fixed;
+    top: var(--toolbar-h); left: 0; right: 0; bottom: 0;
+    overflow-x: auto; overflow-y: hidden;
+    display: none; background: var(--bg);
+    cursor: grab;
+  }
+  #viewer.visible  { display: block; }
+  #viewer.dragging { cursor: grabbing; }
+
+  #viewer::-webkit-scrollbar       { height: 4px; }
+  #viewer::-webkit-scrollbar-track { background: var(--surface); }
+  #viewer::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
+  #viewer::-webkit-scrollbar-thumb:hover { background: var(--amber-dim); }
+
+  /* No gap between pages */
+  #pages-container {
+    display: flex;
+    flex-direction: row;
+    align-items: center;
+    gap: 0;
+    padding: 0;
+    min-height: 100%;
+    width: max-content;
+    transform-origin: top left;
+  }
+
+  .page-wrapper {
+    flex-shrink: 0;
+    display: block;
+    line-height: 0;
+  }
+  .page-wrapper canvas { display: block; background: #fff; }
+
+  /* Page number overlay */
+  .page-wrapper .page-num {
+    position: absolute;
+    bottom: 6px; left: 50%;
+    transform: translateX(-50%);
+    font-size: 10px;
+    color: rgba(255,255,255,0.55);
+    background: rgba(0,0,0,0.45);
+    padding: 1px 6px;
+    border-radius: 8px;
+    pointer-events: none;
+    white-space: nowrap;
+    opacity: 0;
+    transition: opacity 0.4s ease;
+  }
+  body.overlays-visible .page-num { opacity: 1; }
+  .page-wrapper { position: relative; }
+
+  /* ── LOADING ─────────────────────────────── */
+  #loading {
+    position: fixed; inset: 0; background: var(--bg);
+    display: flex; align-items: center; justify-content: center;
+    flex-direction: column; gap: 16px;
+    z-index: 150; opacity: 0; pointer-events: none; transition: opacity 0.2s;
+  }
+  #loading.visible { opacity: 1; pointer-events: all; }
+
+  .spinner {
+    width: 32px; height: 32px;
+    border: 2px solid var(--border); border-top-color: var(--amber);
+    border-radius: 50%; animation: spin 0.7s linear infinite;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  .loading-text { font-size: 11px; color: var(--text-dim); }
+
+  #progress-bar {
+    position: fixed; bottom: 0; left: 0;
+    height: 2px; background: var(--amber); width: 0%;
+    z-index: 100; transition: width 0.1s;
+    box-shadow: 0 0 8px var(--amber);
+  }
+
+  #zoom-hint {
+    position: fixed; bottom: 20px; right: 20px;
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: var(--radius); padding: 6px 12px;
+    font-size: 10px; color: var(--text-dim);
+    opacity: 0; transition: opacity 0.3s; pointer-events: none; z-index: 101;
+  }
+  #zoom-hint.visible { opacity: 1; }
+
+  #page-indicator {
+    position: fixed; bottom: 14px; left: 50%; transform: translateX(-50%);
+    font-size: 10px; color: var(--text-muted); pointer-events: none; z-index: 101;
+    opacity: 0; transition: opacity 0.4s ease;
+  }
+  #page-indicator.visible { opacity: 1; }
+
+  /* Continuous scroll indicator */
+  #scroll-indicator {
+    position: fixed; bottom: 30px; right: 20px;
+    background: var(--surface); border: 1px solid var(--amber);
+    border-radius: var(--radius); padding: 5px 10px;
+    font-size: 10px; color: var(--amber);
+    opacity: 0; transition: opacity 0.3s; pointer-events: none; z-index: 101;
+  }
+  #scroll-indicator.visible { opacity: 1; }
+</style>
+</head>
+<body>
+
+<div id="drag-overlay"></div>
+
+<div id="toolbar">
+  <div class="tb-logo">▣ RollPDF</div>
+  <div class="tb-sep"></div>
+  <div class="tb-info" id="tb-info">Drop a PDF to open</div>
+  <div class="tb-spacer"></div>
+
+  <!-- Binding direction -->
+  <button class="btn" id="btn-direction" title="Toggle binding direction">
+    <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5">
+      <path id="dir-arrow" d="M2 8h12M10 4l4 4-4 4"/>
+    </svg>
+    <span id="direction-label">L-bind</span>
+  </button>
+
+  <div class="tb-sep"></div>
+
+  <!-- Zoom -->
+  <button class="btn" id="btn-zoom-out" title="Zoom out (Ctrl+-)">
+    <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5">
+      <circle cx="7" cy="7" r="5"/><path d="M13 13l-2.5-2.5M5 7h4"/>
+    </svg>
+  </button>
+  <div class="zoom-display" id="zoom-display">100%</div>
+  <button class="btn" id="btn-zoom-in" title="Zoom in (Ctrl++)">
+    <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5">
+      <circle cx="7" cy="7" r="5"/><path d="M13 13l-2.5-2.5M5 7h4M7 5v4"/>
+    </svg>
+  </button>
+  <!-- Fit height button (replaces 100% reset) -->
+  <button class="btn" id="btn-fit-height" title="Fit page height">
+    <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5">
+      <path d="M8 2v12M5 4l3-3 3 3M5 12l3 3 3-3"/>
+    </svg>
+    FIT
+  </button>
+
+
+  <div class="tb-sep"></div>
+
+  <!-- Open file -->
+  <button class="btn" id="btn-open" title="Open file">
+    <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5">
+      <path d="M2 4h5l2 2h5v8H2z"/>
+    </svg>
+    Open
+  </button>
+
+  <div class="tb-sep"></div>
+
+  <!-- Fullscreen -->
+  <button class="btn" id="btn-fullscreen" title="Fullscreen (F)">
+    <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" id="fs-icon">
+      <path d="M2 5V2h3M11 2h3v3M14 11v3h-3M5 14H2v-3"/>
+    </svg>
+  </button>
+</div>
+
+<!-- Fullscreen hover trigger -->
+<div id="toolbar-trigger"></div>
+
+<!-- Drop zone -->
+<div id="drop-zone">
+  <div class="drop-icon">
+    <svg viewBox="0 0 32 32" fill="none" stroke="currentColor" stroke-width="1.5">
+      <path d="M6 26h20M16 6v14M10 14l6-6 6 6"/>
+    </svg>
+  </div>
+  <div class="drop-title">Drop a PDF</div>
+  <div class="drop-sub">Drag & drop a PDF file here<br>or click the button below</div>
+  <button class="drop-btn" id="drop-open-btn">Choose file</button>
+</div>
+
+<!-- Loading -->
+<div id="loading">
+  <div class="spinner"></div>
+  <div class="loading-text" id="loading-text">Loading PDF…</div>
+</div>
+
+<!-- Viewer -->
+<div id="viewer">
+  <div id="pages-container"></div>
+</div>
+
+<div id="progress-bar"></div>
+<div id="zoom-hint">Ctrl+Wheel to zoom</div>
+<div id="page-indicator"></div>
+<div id="scroll-indicator">▶▶ Continuous scroll</div>
+
+<input type="file" id="file-input" accept=".pdf,application/pdf">
+
+<script>
+pdfjsLib.GlobalWorkerOptions.workerSrc =
+  'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+
+// ── State ─────────────────────────────────────────────
+let pdfDoc        = null;
+let isRTL         = false;
+let totalPages    = 0;
+let renderedPages = 0;
+let zoomHintTimer = null;
+
+// Zoom: pages rendered once at RENDER_SCALE; uiScale = CSS zoom only
+const RENDER_SCALE = 1.5;
+let uiScale        = 1.0;
+
+// ── Drag / inertia / continuous-scroll state ──────────
+let isDragging     = false;
+let dragStartX     = 0;
+let dragScrollLeft = 0;
+let dragSamples    = [];   // [{x,t}] — full history for average velocity
+let dragStartTime  = 0;
+let inertiaRAF     = null;
+let isAutoScroll   = false; // continuous scroll active
+
+const FRICTION             = 0.92;
+const MIN_VEL              = 0.5;    // px/frame stop threshold
+const VEL_WIN              = 80;     // ms window for instant velocity
+const CONTINUOUS_THRESHOLD = 1000;  // ms: long drag → continuous scroll
+
+// ── Overlay auto-hide ─────────────────────────────────
+// Overlays: page numbers + page indicator + scroll indicator
+// Shown on scroll/drag activity; auto-hide after 3s of inactivity
+let overlayHideTimer = null;
+const OVERLAY_TIMEOUT = 3000; // ms
+
+function showOverlays() {
+  document.body.classList.add('overlays-visible');
+  pageIndicator.classList.add('visible');
+  clearTimeout(overlayHideTimer);
+  overlayHideTimer = setTimeout(hideOverlays, OVERLAY_TIMEOUT);
+}
+
+function hideOverlays() {
+  document.body.classList.remove('overlays-visible');
+  pageIndicator.classList.remove('visible');
+  // scroll-indicator is managed separately (stays while continuous scrolling)
+}
+
+// ── Elements ──────────────────────────────────────────
+const dropZone        = document.getElementById('drop-zone');
+const viewer          = document.getElementById('viewer');
+const pagesContainer  = document.getElementById('pages-container');
+const loading         = document.getElementById('loading');
+const loadingText     = document.getElementById('loading-text');
+const progressBar     = document.getElementById('progress-bar');
+const zoomDisplay     = document.getElementById('zoom-display');
+const tbInfo          = document.getElementById('tb-info');
+const btnDirection    = document.getElementById('btn-direction');
+const directionLabel  = document.getElementById('direction-label');
+const dirArrow        = document.getElementById('dir-arrow');
+const btnZoomIn       = document.getElementById('btn-zoom-in');
+const btnZoomOut      = document.getElementById('btn-zoom-out');
+const btnFitHeight    = document.getElementById('btn-fit-height');
+const zoomHint        = document.getElementById('zoom-hint');
+const pageIndicator   = document.getElementById('page-indicator');
+const scrollIndicator = document.getElementById('scroll-indicator');
+const fileInput       = document.getElementById('file-input');
+const dragOverlay     = document.getElementById('drag-overlay');
+const btnFullscreen   = document.getElementById('btn-fullscreen');
+const fsIcon          = document.getElementById('fs-icon');
+const toolbarTrigger  = document.getElementById('toolbar-trigger');
+
+// ── Fullscreen ────────────────────────────────────────
+function enterFullscreen() { document.documentElement.requestFullscreen().catch(() => {}); }
+function exitFullscreen()  { if (document.fullscreenElement) document.exitFullscreen().catch(() => {}); }
+
+let toolbarHideTimer = null;
+function showToolbar() {
+  document.body.classList.add('toolbar-visible');
+  clearTimeout(toolbarHideTimer);
+  toolbarHideTimer = setTimeout(() => document.body.classList.remove('toolbar-visible'), 2200);
+}
+
+document.addEventListener('fullscreenchange', () => {
+  const isFs = !!document.fullscreenElement;
+  document.body.classList.toggle('is-fullscreen', isFs);
+  fsIcon.innerHTML = isFs
+    ? '<path d="M5 2H2v3M14 5V2h-3M11 14h3v-3M2 11v3h3"/>'
+    : '<path d="M2 5V2h3M11 2h3v3M14 11v3h-3M5 14H2v-3"/>';
+  if (!isFs) { document.body.classList.remove('toolbar-visible'); clearTimeout(toolbarHideTimer); }
+});
+
+btnFullscreen.addEventListener('click', () =>
+  document.fullscreenElement ? exitFullscreen() : enterFullscreen()
+);
+toolbarTrigger.addEventListener('mouseenter', showToolbar);
+document.getElementById('toolbar').addEventListener('mouseenter', showToolbar);
+document.getElementById('toolbar').addEventListener('mouseleave', () => {
+  if (!document.body.classList.contains('is-fullscreen')) return;
+  toolbarHideTimer = setTimeout(() => document.body.classList.remove('toolbar-visible'), 400);
+});
+
+// ── URL parameter parsing ─────────────────────────────
+function getParams() {
+  const p = new URLSearchParams(window.location.search);
+  return {
+    pdfUrl:     p.get('pdf')         || null,
+    page:       parseInt(p.get('page')) || 1,
+    binding:    (p.get('binding')    || '').toUpperCase(),   // 'R' | 'L'
+    autoscroll: (p.get('autoscroll') || '').toLowerCase(),   // 'on' | 'off'
+  };
+}
+
+// ── File loading ──────────────────────────────────────
+async function loadFile(file) {
+  if (!file) return;
+  stopScroll();
+  showLoading('Loading PDF…');
+  try {
+    const buf         = await file.arrayBuffer();
+    const loadingTask = pdfjsLib.getDocument({ data: buf });
+    loadingTask.onProgress = (d) => {
+      if (d.total) progressBar.style.width = Math.round((d.loaded / d.total) * 50) + '%';
+    };
+    pdfDoc     = await loadingTask.promise;
+    totalPages = pdfDoc.numPages;
+    tbInfo.innerHTML = `<span>${file.name.replace(/\.pdf$/i, '')}</span> · ${totalPages}p`;
+    await afterDocLoaded({ page: 1 });
+  } catch (e) {
+    showError('Failed to load PDF');
+    console.error(e);
+  }
+}
+
+async function loadUrl(url, params) {
+  stopScroll();
+  showLoading('Fetching PDF…');
+  try {
+    const loadingTask = pdfjsLib.getDocument({ url, withCredentials: false });
+    loadingTask.onProgress = (d) => {
+      if (d.total) progressBar.style.width = Math.round((d.loaded / d.total) * 50) + '%';
+    };
+    pdfDoc     = await loadingTask.promise;
+    totalPages = pdfDoc.numPages;
+    const name = url.split('/').pop().replace(/\.pdf$/i, '') || 'document';
+    tbInfo.innerHTML = `<span>${name}</span> · ${totalPages}p`;
+    await afterDocLoaded(params);
+  } catch (e) {
+    showError('Failed to fetch PDF');
+    console.error(e);
+  }
+}
+
+// Shared post-load steps: detect binding, fit height, render, scroll to page
+async function afterDocLoaded(params) {
+  // 1. Detect binding from ViewerPreferences (unless overridden by URL param)
+  if (params.binding === 'R') {
+    isRTL = true;
+  } else if (params.binding === 'L') {
+    isRTL = false;
+  } else {
+    try {
+      const prefs = await pdfDoc.getViewerPreferences();
+      isRTL = !!(prefs && prefs.Direction === 'R2L');
+    } catch (_) {}
+  }
+  updateDirectionUI();
+
+  // 2. Compute fit-height scale from first page before rendering
+  await applyFitHeight();
+
+  dropZone.classList.add('hidden');
+  viewer.classList.add('visible');
+
+  // 3. Render all pages
+  await renderAllPages(params.page);
+
+  // 4. Autoscroll from URL param
+  if (params.autoscroll === 'on') {
+    // start continuous scroll at a default gentle speed
+    startContinuous(2 * (isRTL ? -1 : 1));
+  }
+}
+
+// ── Fit height ────────────────────────────────────────
+async function applyFitHeight() {
+  if (!pdfDoc) return;
+  try {
+    const page     = await pdfDoc.getPage(1);
+    const vp       = page.getViewport({ scale: RENDER_SCALE });
+    const viewerH  = viewer.clientHeight || (window.innerHeight - (document.body.classList.contains('is-fullscreen') ? 0 : parseInt(getComputedStyle(document.documentElement).getPropertyValue('--toolbar-h'))));
+    const fScale   = viewerH / vp.height;
+    uiScale = Math.min(3.0, Math.max(0.25, fScale));
+    zoomDisplay.textContent = Math.round(uiScale * 100) + '%';
+    pagesContainer.style.zoom = String(uiScale);
+  } catch (e) { console.error('fitHeight:', e); }
+}
+
+// ── Render all pages ──────────────────────────────────
+async function renderAllPages(targetPage) {
+  if (!pdfDoc) return;
+  showLoading('Rendering pages…');
+  pagesContainer.innerHTML = '';
+  pagesContainer.style.zoom = String(uiScale);
+  renderedPages = 0;
+
+  const nums = Array.from({ length: totalPages }, (_, i) => i + 1);
+  if (isRTL) nums.reverse();
+
+  for (const pageNum of nums) {
+    try {
+      const page     = await pdfDoc.getPage(pageNum);
+      const viewport = page.getViewport({ scale: RENDER_SCALE });
+
+      const wrapper       = document.createElement('div');
+      wrapper.className   = 'page-wrapper';
+      wrapper.dataset.page = pageNum;
+
+      const canvas  = document.createElement('canvas');
+      canvas.width  = Math.floor(viewport.width);
+      canvas.height = Math.floor(viewport.height);
+      await page.render({ canvasContext: canvas.getContext('2d'), viewport }).promise;
+      wrapper.appendChild(canvas);
+
+      // Page number overlay
+      const numEl   = document.createElement('div');
+      numEl.className = 'page-num';
+      numEl.textContent = pageNum;
+      wrapper.appendChild(numEl);
+
+      pagesContainer.appendChild(wrapper);
+
+      renderedPages++;
+      progressBar.style.width = (50 + Math.round((renderedPages / totalPages) * 50)) + '%';
+      loadingText.textContent = `Page ${renderedPages} / ${totalPages}`;
+    } catch (e) {
+      console.error(`Page ${pageNum}:`, e);
+    }
+  }
+
+  hideLoading();
+  progressBar.style.width = '100%';
+  setTimeout(() => { progressBar.style.width = '0%'; }, 800);
+
+  // Scroll to target page after layout settles
+  requestAnimationFrame(() => {
+    scrollToPage(targetPage);
+    updatePageIndicator();
+  });
+
+  if (!localStorage.getItem('zoomHintSeen')) {
+    showZoomHint();
+    localStorage.setItem('zoomHintSeen', '1');
+  }
+}
+
+// ── Scroll to page number ─────────────────────────────
+function scrollToPage(pageNum) {
+  if (!pdfDoc) return;
+  const clampedPage = Math.max(1, Math.min(totalPages, pageNum));
+  // In RTL mode page order is reversed in DOM
+  const domIndex = isRTL ? (totalPages - clampedPage) : (clampedPage - 1);
+  const wrappers = pagesContainer.querySelectorAll('.page-wrapper');
+  if (wrappers[domIndex]) {
+    // scrollLeft relative to #viewer considering CSS zoom
+    const wrapper    = wrappers[domIndex];
+    const wLeft      = wrapper.offsetLeft * uiScale;
+    viewer.scrollLeft = wLeft;
+  } else {
+    // Fallback: proportional scroll
+    if (isRTL) {
+      viewer.scrollLeft = viewer.scrollWidth;
+    } else {
+      viewer.scrollLeft = 0;
+    }
+  }
+}
+
+// ── Direction toggle ──────────────────────────────────
+function updateDirectionUI() {
+  directionLabel.textContent = isRTL ? 'R-bind' : 'L-bind';
+  dirArrow.setAttribute('d', isRTL
+    ? 'M14 8H2M6 4L2 8l4 4'
+    : 'M2 8h12M10 4l4 4-4 4');
+}
+
+btnDirection.addEventListener('click', () => {
+  isRTL = !isRTL;
+  updateDirectionUI();
+  if (pdfDoc) renderAllPages(1);
+});
+
+// ── Zoom (CSS-only — no re-render) ────────────────────
+const SCALE_STEP = 0.15;
+const SCALE_MIN  = 0.25;
+const SCALE_MAX  = 3.0;
+
+function setScale(v) {
+  uiScale = Math.min(SCALE_MAX, Math.max(SCALE_MIN, v));
+  zoomDisplay.textContent = Math.round(uiScale * 100) + '%';
+  pagesContainer.style.zoom = String(uiScale);
+  updatePageIndicator();
+}
+
+btnZoomIn.addEventListener('click',     () => setScale(uiScale + SCALE_STEP));
+btnZoomOut.addEventListener('click',    () => setScale(uiScale - SCALE_STEP));
+btnFitHeight.addEventListener('click',  () => applyFitHeight());
+
+// ── Wheel: zoom or scroll ─────────────────────────────
+viewer.addEventListener('wheel', (e) => {
+  e.preventDefault();
+  if (e.ctrlKey || e.metaKey) {
+    setScale(uiScale + (e.deltaY > 0 ? -SCALE_STEP : SCALE_STEP));
+    showZoomHint();
+    return;
+  }
+  stopScroll();
+  showOverlays(); // user wheel scroll
+  const raw = Math.abs(e.deltaX) > Math.abs(e.deltaY) ? e.deltaX : e.deltaY;
+  const dir = isRTL ? -1 : 1;
+  viewer.scrollLeft += raw * dir * 1.5;
+  updatePageIndicator();
+}, { passive: false });
+
+// ── Mouse drag → velocity tracking ───────────────────
+viewer.addEventListener('mousedown', (e) => {
+  if (e.button !== 0) return;
+  stopScroll();
+  showOverlays(); // user interaction starts
+  const now      = performance.now();
+  isDragging     = true;
+  dragStartX     = e.clientX;
+  dragScrollLeft = viewer.scrollLeft;
+  dragStartTime  = now;
+  dragSamples    = [{ x: e.clientX, t: now }];
+  viewer.classList.add('dragging');
+  e.preventDefault();
+});
+
+document.addEventListener('mousemove', (e) => {
+  if (!isDragging) return;
+  dragSamples.push({ x: e.clientX, t: performance.now() });
+  const dir = isRTL ? -1 : 1;
+  viewer.scrollLeft = dragScrollLeft + (dragStartX - e.clientX) * dir;
+  updatePageIndicator();
+});
+
+document.addEventListener('mouseup', () => {
+  if (!isDragging) return;
+  isDragging = false;
+  viewer.classList.remove('dragging');
+
+  const now      = performance.now();
+  const duration = now - dragStartTime;
+
+  if (duration >= CONTINUOUS_THRESHOLD && dragSamples.length >= 2) {
+    // Long drag → continuous scroll at average speed
+    const first   = dragSamples[0];
+    const last    = dragSamples[dragSamples.length - 1];
+    const totalDt = last.t - first.t;
+    if (totalDt > 0) {
+      const avgVelMs    = (first.x - last.x) / totalDt;
+      const avgFrameVel = avgVelMs * (1000 / 60);
+      const finalVel    = avgFrameVel * (isRTL ? -1 : 1);
+      if (Math.abs(finalVel) > MIN_VEL) {
+        startContinuous(finalVel);
+        return;
+      }
+    }
+  }
+
+  // Short drag → inertia with friction decay
+  const recent = dragSamples.filter(s => now - s.t <= VEL_WIN);
+  if (recent.length >= 2) {
+    const first = recent[0], last = recent[recent.length - 1];
+    const dt    = last.t - first.t;
+    if (dt > 0) {
+      const frameVel = ((first.x - last.x) / dt) * (1000 / 60);
+      const finalVel = frameVel * (isRTL ? -1 : 1);
+      if (Math.abs(finalVel) > MIN_VEL) {
+        startInertia(finalVel);
+      }
+    }
+  }
+});
+
+// ── Inertia (friction decay) ──────────────────────────
+function startInertia(vel) {
+  stopScroll();
+  isAutoScroll = false;
+  showOverlays(); // show once at inertia start; 3s timer runs independently
+  function tick() {
+    if (Math.abs(vel) < MIN_VEL) { inertiaRAF = null; return; }
+    viewer.scrollLeft += vel;
+    vel *= FRICTION;
+    updatePageIndicator();
+    inertiaRAF = requestAnimationFrame(tick);
+  }
+  inertiaRAF = requestAnimationFrame(tick);
+}
+
+// ── Continuous scroll (constant speed) ───────────────
+let scrollIndicatorTimer = null;
+
+function startContinuous(vel) {
+  stopScroll();
+  isAutoScroll = true;
+  showOverlays(); // show overlays at continuous scroll start
+  // Show scroll indicator, auto-hide after 3s
+  scrollIndicator.classList.add('visible');
+  clearTimeout(scrollIndicatorTimer);
+  scrollIndicatorTimer = setTimeout(() => scrollIndicator.classList.remove('visible'), OVERLAY_TIMEOUT);
+  function tick() {
+    const maxScroll = viewer.scrollWidth - viewer.clientWidth;
+    const atEnd = vel > 0 ? viewer.scrollLeft >= maxScroll - 1 : viewer.scrollLeft <= 1;
+    if (atEnd) { inertiaRAF = null; isAutoScroll = false; scrollIndicator.classList.remove('visible'); return; }
+    viewer.scrollLeft += vel;
+    updatePageIndicator();
+    inertiaRAF = requestAnimationFrame(tick);
+  }
+  inertiaRAF = requestAnimationFrame(tick);
+}
+
+function stopScroll() {
+  if (inertiaRAF) { cancelAnimationFrame(inertiaRAF); inertiaRAF = null; }
+  if (isAutoScroll) { isAutoScroll = false; scrollIndicator.classList.remove('visible'); clearTimeout(scrollIndicatorTimer); }
+}
+
+// ── Page indicator ────────────────────────────────────
+function updatePageIndicator() {
+  if (!pdfDoc) return;
+  const max  = viewer.scrollWidth - viewer.clientWidth;
+  const pct  = max > 0 ? viewer.scrollLeft / max : 0;
+  const approxPage = isRTL
+    ? Math.max(1, totalPages - Math.floor(pct * totalPages))
+    : Math.max(1, Math.ceil(pct * totalPages) || 1);
+  pageIndicator.textContent = `${approxPage} / ${totalPages}`;
+}
+viewer.addEventListener('scroll', updatePageIndicator);
+
+// ── File drag & drop ──────────────────────────────────
+let dragCounter = 0;
+document.addEventListener('dragenter', (e) => {
+  e.preventDefault(); dragCounter++;
+  dragOverlay.classList.add('visible');
+  dropZone.classList.add('drag-over');
+});
+document.addEventListener('dragleave', () => {
+  if (--dragCounter <= 0) {
+    dragCounter = 0;
+    dragOverlay.classList.remove('visible');
+    dropZone.classList.remove('drag-over');
+  }
+});
+document.addEventListener('dragover', (e) => e.preventDefault());
+document.addEventListener('drop', (e) => {
+  e.preventDefault(); dragCounter = 0;
+  dragOverlay.classList.remove('visible');
+  dropZone.classList.remove('drag-over');
+  const f = e.dataTransfer.files[0];
+  if (f) loadFile(f);
+});
+
+// ── File input ────────────────────────────────────────
+['btn-open', 'drop-open-btn'].forEach(id =>
+  document.getElementById(id).addEventListener('click', () => fileInput.click())
+);
+fileInput.addEventListener('change', (e) => {
+  if (e.target.files[0]) loadFile(e.target.files[0]);
+  e.target.value = '';
+});
+
+// ── Keyboard shortcuts ────────────────────────────────
+document.addEventListener('keydown', (e) => {
+  if ((e.key === 'F' || e.key === 'f') && !e.ctrlKey && !e.metaKey) {
+    document.fullscreenElement ? exitFullscreen() : enterFullscreen(); return;
+  }
+  if (e.key === 'Escape' && document.fullscreenElement) { exitFullscreen(); return; }
+  if (e.key === 'Escape' && isAutoScroll)               { stopScroll(); return; }
+  if (e.ctrlKey || e.metaKey) {
+    if (e.key === '=' || e.key === '+') { e.preventDefault(); setScale(uiScale + SCALE_STEP); }
+    if (e.key === '-')                  { e.preventDefault(); setScale(uiScale - SCALE_STEP); }
+    if (e.key === '0')                  { e.preventDefault(); applyFitHeight(); }
+  }
+  const dir = isRTL ? -1 : 1;
+  if (e.key === 'ArrowRight') { stopScroll(); viewer.scrollLeft += 220 * dir; }
+  if (e.key === 'ArrowLeft')  { stopScroll(); viewer.scrollLeft -= 220 * dir; }
+});
+
+// ── UI helpers ────────────────────────────────────────
+function showLoading(msg) { loading.classList.add('visible'); loadingText.textContent = msg || '…'; }
+function hideLoading()    { loading.classList.remove('visible'); }
+function showError(msg)   { hideLoading(); loadingText.textContent = msg; loading.classList.add('visible'); setTimeout(hideLoading, 3000); }
+function showZoomHint()   {
+  zoomHint.classList.add('visible');
+  if (zoomHintTimer) clearTimeout(zoomHintTimer);
+  zoomHintTimer = setTimeout(() => zoomHint.classList.remove('visible'), 2500);
+}
+
+// ── URL param initialization ──────────────────────────
+(function initFromUrl() {
+  const params = getParams();
+  if (params.pdfUrl) {
+    loadUrl(params.pdfUrl, params);
+  }
+})();
+</script>
+</body>
+</html>
