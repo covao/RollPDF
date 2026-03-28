@@ -153,14 +153,14 @@
   #viewer {
     position: fixed;
     top: var(--toolbar-h); left: 0; right: 0; bottom: 0;
-    overflow-x: auto; overflow-y: hidden;
+    overflow-x: auto; overflow-y: auto;
     display: none; background: var(--bg);
     cursor: grab;
   }
   #viewer.visible  { display: block; }
   #viewer.dragging { cursor: grabbing; }
 
-  #viewer::-webkit-scrollbar       { height: 4px; }
+  #viewer::-webkit-scrollbar       { height: 4px; width: 4px; }
   #viewer::-webkit-scrollbar-track { background: var(--surface); }
   #viewer::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
   #viewer::-webkit-scrollbar-thumb:hover { background: var(--amber-dim); }
@@ -365,7 +365,9 @@ let uiScale        = 1.0;
 // ── Drag / inertia / continuous-scroll state ──────────
 let isDragging     = false;
 let dragStartX     = 0;
+let dragStartY     = 0;
 let dragScrollLeft = 0;
+let dragScrollTop  = 0;
 let dragSamples    = [];   // [{x,t}] — full history for average velocity
 let dragStartTime  = 0;
 let inertiaRAF     = null;
@@ -686,7 +688,9 @@ viewer.addEventListener('mousedown', (e) => {
   const now      = performance.now();
   isDragging     = true;
   dragStartX     = e.clientX;
+  dragStartY     = e.clientY;
   dragScrollLeft = viewer.scrollLeft;
+  dragScrollTop  = viewer.scrollTop;
   dragStartTime  = now;
   dragSamples    = [{ x: e.clientX, t: now }];
   viewer.classList.add('dragging');
@@ -698,6 +702,7 @@ document.addEventListener('mousemove', (e) => {
   dragSamples.push({ x: e.clientX, t: performance.now() });
   const dir = isRTL ? -1 : 1;
   viewer.scrollLeft = dragScrollLeft + (dragStartX - e.clientX) * dir;
+  viewer.scrollTop  = dragScrollTop  + (dragStartY - e.clientY);
   updatePageIndicator();
 });
 
