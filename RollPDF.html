@@ -190,23 +190,6 @@
     filter: contrast(1.1);
   }
 
-  /* PDF.js text layer — DOM text for crisp rendering at any zoom */
-  .textLayer {
-    position: absolute;
-    top: 0; left: 0;
-    width: 100%; height: 100%;
-    overflow: hidden;
-    pointer-events: none;
-    line-height: 1;
-    -webkit-text-size-adjust: none;
-    text-size-adjust: none;
-  }
-  .textLayer span,
-  .textLayer br {
-    position: absolute;
-    white-space: pre;
-    transform-origin: 0% 0%;
-  }
 
   /* Page number overlay */
   .page-wrapper .page-num {
@@ -505,7 +488,7 @@ async function loadFile(file) {
   showLoading('Loading PDF…');
   try {
     const buf         = await file.arrayBuffer();
-    const loadingTask = pdfjsLib.getDocument({ data: buf, cMapUrl: 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/cmaps/', cMapPacked: true });
+    const loadingTask = pdfjsLib.getDocument({ data: buf, cMapUrl: 'https://cdn.jsdelivr.net/npm/pdfjs-dist@3.11.174/cmaps/', cMapPacked: true });
     loadingTask.onProgress = (d) => {
       if (d.total) progressBar.style.width = Math.round((d.loaded / d.total) * 50) + '%';
     };
@@ -523,7 +506,7 @@ async function loadUrl(url, params) {
   stopScroll();
   showLoading('Fetching PDF…');
   try {
-    const loadingTask = pdfjsLib.getDocument({ url, withCredentials: false, cMapUrl: 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/cmaps/', cMapPacked: true });
+    const loadingTask = pdfjsLib.getDocument({ url, withCredentials: false, cMapUrl: 'https://cdn.jsdelivr.net/npm/pdfjs-dist@3.11.174/cmaps/', cMapPacked: true });
     loadingTask.onProgress = (d) => {
       if (d.total) progressBar.style.width = Math.round((d.loaded / d.total) * 50) + '%';
     };
@@ -620,21 +603,6 @@ async function renderAllPages(targetPage) {
       await page.render({ canvasContext: ctx, viewport }).promise;
       wrapper.appendChild(canvas);
 
-      // Text layer — real DOM text for crisp rendering at any zoom level
-      try {
-        const textContent  = await page.getTextContent();
-        const textLayerDiv = document.createElement('div');
-        textLayerDiv.className = 'textLayer';
-        // Use logical viewport (renderScale, not physScale) so spans match CSS canvas size
-        const textViewport = page.getViewport({ scale: renderScale });
-        pdfjsLib.renderTextLayer({
-          textContentSource: textContent,
-          container: textLayerDiv,
-          viewport: textViewport,
-          textDivs: [],
-        });
-        wrapper.appendChild(textLayerDiv);
-      } catch (_) { /* text layer optional — silently skip if unsupported */ }
 
       // Page number overlay
       const numEl   = document.createElement('div');
