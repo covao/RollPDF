@@ -4,6 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>RollPDF</title>
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90' fill='%23f5a623'>▣</text></svg>">
 <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@300;400;500&family=Syne:wght@700;800&display=swap" rel="stylesheet">
@@ -75,7 +76,10 @@
     letter-spacing: -0.5px;
     margin-right: 8px;
     white-space: nowrap;
+    cursor: pointer;
+    transition: opacity 0.15s;
   }
+  .tb-logo:hover { opacity: 0.75; }
   .tb-sep { width: 1px; height: 24px; background: var(--border); margin: 0 6px; }
   .tb-info {
     color: var(--text-dim); font-size: 11px;
@@ -258,6 +262,25 @@
     opacity: 0; transition: opacity 0.3s; pointer-events: none; z-index: 101;
   }
   #scroll-indicator.visible { opacity: 1; }
+
+  /* Render progress badge */
+  #render-progress {
+    position: fixed;
+    top: calc(var(--toolbar-h) + 10px); right: 16px;
+    background: var(--surface); border: 1px solid var(--amber);
+    border-radius: var(--radius); padding: 4px 10px;
+    font-size: 10px; color: var(--amber);
+    z-index: 120; opacity: 0; transition: opacity 0.3s;
+    pointer-events: none;
+    display: flex; align-items: center; gap: 6px;
+  }
+  #render-progress.visible { opacity: 1; }
+  #render-progress .rp-spinner {
+    width: 10px; height: 10px;
+    border: 1.5px solid var(--border); border-top-color: var(--amber);
+    border-radius: 50%; animation: spin 0.7s linear infinite;
+    flex-shrink: 0;
+  }
 </style>
 </head>
 <body>
@@ -265,7 +288,7 @@
 <div id="drag-overlay"></div>
 
 <div id="toolbar">
-  <div class="tb-logo">▣ RollPDF</div>
+  <div class="tb-logo" id="tb-logo" title="Open RollPDF on GitHub">▣ RollPDF</div>
   <div class="tb-sep"></div>
   <div class="tb-info" id="tb-info">Drop a PDF to open</div>
   <div class="tb-spacer"></div>
@@ -347,6 +370,7 @@
   <div id="pages-container"></div>
 </div>
 
+<div id="render-progress"><span class="rp-spinner"></span><span id="render-progress-text"></span></div>
 <div id="progress-bar"></div>
 <div id="zoom-hint">Ctrl+Wheel to zoom</div>
 <div id="page-indicator"></div>
@@ -428,6 +452,8 @@ const btnFitHeight    = document.getElementById('btn-fit-height');
 const zoomHint        = document.getElementById('zoom-hint');
 const pageIndicator   = document.getElementById('page-indicator');
 const scrollIndicator = document.getElementById('scroll-indicator');
+const renderProgress  = document.getElementById('render-progress');
+const renderProgressText = document.getElementById('render-progress-text');
 const fileInput       = document.getElementById('file-input');
 const dragOverlay     = document.getElementById('drag-overlay');
 const btnFullscreen   = document.getElementById('btn-fullscreen');
@@ -474,7 +500,7 @@ document.getElementById('toolbar').addEventListener('mouseleave', () => {
 function getParams() {
   const p = new URLSearchParams(window.location.search);
   return {
-    pdfUrl:     p.get('pdf')         || null,
+    pdfUrl:     p.get('pdf') || p.get('url') || null,
     page:       parseInt(p.get('page')) || 1,
     binding:    (p.get('binding')    || '').toUpperCase(),   // 'R' | 'L'
     autoscroll: (p.get('autoscroll') || '').toLowerCase(),   // 'on' | 'off'
@@ -494,7 +520,8 @@ async function loadFile(file) {
     };
     pdfDoc     = await loadingTask.promise;
     totalPages = pdfDoc.numPages;
-    tbInfo.innerHTML = `<span>${file.name.replace(/\.pdf$/i, '')}</span> · ${totalPages}p`;
+    const displayName = (() => { try { return decodeURIComponent(file.name); } catch(_) { return file.name; } })();
+    tbInfo.innerHTML = `<span>${displayName.replace(/\.pdf$/i, '')}</span>`;
     await afterDocLoaded({ page: 1 });
   } catch (e) {
     showError('Failed to load PDF');
@@ -512,8 +539,9 @@ async function loadUrl(url, params) {
     };
     pdfDoc     = await loadingTask.promise;
     totalPages = pdfDoc.numPages;
-    const name = url.split('/').pop().replace(/\.pdf$/i, '') || 'document';
-    tbInfo.innerHTML = `<span>${name}</span> · ${totalPages}p`;
+    const rawName = url.split('/').pop().replace(/\.pdf$/i, '') || 'document';
+    const name = (() => { try { return decodeURIComponent(rawName); } catch(_) { return rawName; } })();
+    tbInfo.innerHTML = `<span>${name}</span>`;
     await afterDocLoaded(params);
   } catch (e) {
     showError('Failed to fetch PDF');
@@ -541,6 +569,7 @@ async function afterDocLoaded(params) {
 
   dropZone.classList.add('hidden');
   viewer.classList.add('visible');
+  hideLoading(); // hide full-screen overlay so viewer is immediately visible
 
   // 3. Render all pages
   await renderAllPages(params.page);
@@ -573,13 +602,16 @@ async function applyFitHeight() {
 // ── Render all pages ──────────────────────────────────
 async function renderAllPages(targetPage) {
   if (!pdfDoc) return;
-  showLoading('Rendering pages…');
+  // Show small render-progress badge (non-blocking) instead of full loading overlay
   pagesContainer.innerHTML = '';
   renderedPages = 0;
   const dpr       = window.devicePixelRatio || 1;
   renderScale     = fitScale * OVER_RENDER;       // render at 2× fit height (no re-render on zoom)
   const physScale = renderScale * dpr;            // physical px per PDF point
   pagesContainer.style.zoom = String(uiZoom / OVER_RENDER); // CSS zoom so fit = 100%
+
+  renderProgressText.textContent = `0 / ${totalPages}`;
+  renderProgress.classList.add('visible');
 
   const nums = Array.from({ length: totalPages }, (_, i) => i + 1);
   if (isRTL) nums.reverse();
@@ -614,13 +646,13 @@ async function renderAllPages(targetPage) {
 
       renderedPages++;
       progressBar.style.width = (50 + Math.round((renderedPages / totalPages) * 50)) + '%';
-      loadingText.textContent = `Page ${renderedPages} / ${totalPages}`;
+      renderProgressText.textContent = `${renderedPages} / ${totalPages}`;
     } catch (e) {
       console.error(`Page ${pageNum}:`, e);
     }
   }
 
-  hideLoading();
+  renderProgress.classList.remove('visible');
   progressBar.style.width = '100%';
   setTimeout(() => { progressBar.style.width = '0%'; }, 800);
 
@@ -666,6 +698,11 @@ function scrollToPage(pageNum) {
     }
   }
 }
+
+// ── Logo click → GitHub ───────────────────────────────
+document.getElementById('tb-logo').addEventListener('click', () => {
+  window.open('https://github.com/covao/RollPDF', '_blank', 'noopener');
+});
 
 // ── Direction toggle ──────────────────────────────────
 function updateDirectionUI() {
