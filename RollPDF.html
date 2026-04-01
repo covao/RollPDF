@@ -68,6 +68,8 @@
   }
   body.is-fullscreen #toolbar-trigger { display: block; }
   body.is-fullscreen #viewer.visible  { top: 0; }
+  body.is-fullscreen.cursor-hidden,
+  body.is-fullscreen.cursor-hidden * { cursor: none !important; }
 
   .tb-logo {
     font-family: 'Syne', sans-serif;
@@ -401,6 +403,7 @@ let renderScale   = 1.0;      // actual PDF.js scale used in last canvas render
 
 // ── Drag / inertia / continuous-scroll state ──────────
 let isDragging     = false;
+let isRendering    = false;  // true while renderAllPages is running
 let dragStartX     = 0;
 let dragStartY     = 0;
 let dragScrollLeft = 0;
@@ -471,6 +474,19 @@ function showToolbar() {
   toolbarHideTimer = setTimeout(() => document.body.classList.remove('toolbar-visible'), 2200);
 }
 
+// ── Fullscreen cursor auto-hide (3s inactivity) ───────
+let cursorHideTimer = null;
+function resetCursorHide() {
+  if (!document.fullscreenElement) return;
+  document.body.classList.remove('cursor-hidden');
+  clearTimeout(cursorHideTimer);
+  cursorHideTimer = setTimeout(() => {
+    if (document.fullscreenElement) document.body.classList.add('cursor-hidden');
+  }, 3000);
+}
+document.addEventListener('mousemove', resetCursorHide);
+document.addEventListener('mousedown', resetCursorHide);
+
 document.addEventListener('fullscreenchange', () => {
   const isFs = !!document.fullscreenElement;
   document.body.classList.toggle('is-fullscreen', isFs);
@@ -479,10 +495,13 @@ document.addEventListener('fullscreenchange', () => {
     : '<path d="M2 5V2h3M11 2h3v3M14 11v3h-3M5 14H2v-3"/>';
   if (!isFs) {
     document.body.classList.remove('toolbar-visible');
+    document.body.classList.remove('cursor-hidden');
+    clearTimeout(cursorHideTimer);
     clearTimeout(toolbarHideTimer);
   } else {
     // Entering fullscreen: viewer height changed, re-fit after layout settles
     requestAnimationFrame(() => applyFitHeight());
+    resetCursorHide(); // start 3s inactivity timer immediately
   }
 });
 
@@ -608,13 +627,20 @@ async function renderAllPages(targetPage) {
   const dpr       = window.devicePixelRatio || 1;
   renderScale     = fitScale * OVER_RENDER;       // render at 2× fit height (no re-render on zoom)
   const physScale = renderScale * dpr;            // physical px per PDF point
-  pagesContainer.style.zoom = String(uiZoom / OVER_RENDER); // CSS zoom so fit = 100%
+  pagesContainer.style.zoom         = String(uiZoom / OVER_RENDER); // CSS zoom so fit = 100%
+  // R-bind: reverse flex layout so page 1 is at the visual right end
+  pagesContainer.style.flexDirection = isRTL ? 'row-reverse' : '';
 
   renderProgressText.textContent = `0 / ${totalPages}`;
   renderProgress.classList.add('visible');
+  isRendering = true;
+
+  // Track whether user has scrolled/dragged during loading
+  let userScrolledDuringLoad = false;
+  const onUserScroll = () => { userScrolledDuringLoad = true; };
+  viewer.addEventListener('scroll', onUserScroll, { passive: true });
 
   const nums = Array.from({ length: totalPages }, (_, i) => i + 1);
-  if (isRTL) nums.reverse();
 
   for (const pageNum of nums) {
     try {
@@ -635,14 +661,32 @@ async function renderAllPages(targetPage) {
       await page.render({ canvasContext: ctx, viewport }).promise;
       wrapper.appendChild(canvas);
 
-
       // Page number overlay
       const numEl   = document.createElement('div');
       numEl.className = 'page-num';
       numEl.textContent = pageNum;
       wrapper.appendChild(numEl);
 
-      pagesContainer.appendChild(wrapper);
+      // Always append in page order 1→N regardless of binding direction.
+      // row-reverse layout places page 1 at the visual right end.
+      if (isRTL) {
+        const prevScrollWidth = viewer.scrollWidth;
+        pagesContainer.appendChild(wrapper);
+        const addedWidth = viewer.scrollWidth - prevScrollWidth;
+        if (isDragging) {
+          // During drag: don't touch scrollLeft (drag formula owns it).
+          // Instead shift the drag anchor so the formula stays coherent.
+          dragScrollLeft += addedWidth;
+        } else if (userScrolledDuringLoad) {
+          // Compensate: new page added to visual left shifts existing content right
+          viewer.scrollLeft += addedWidth;
+        } else {
+          // User hasn't scrolled yet: pin to right end so page 1 stays visible
+          viewer.scrollLeft = viewer.scrollWidth - viewer.clientWidth;
+        }
+      } else {
+        pagesContainer.appendChild(wrapper);
+      }
 
       renderedPages++;
       progressBar.style.width = (50 + Math.round((renderedPages / totalPages) * 50)) + '%';
@@ -652,15 +696,22 @@ async function renderAllPages(targetPage) {
     }
   }
 
+  viewer.removeEventListener('scroll', onUserScroll);
+  isRendering = false;
+
   renderProgress.classList.remove('visible');
   progressBar.style.width = '100%';
   setTimeout(() => { progressBar.style.width = '0%'; }, 800);
 
-  // Scroll to target page after layout settles
-  requestAnimationFrame(() => {
-    scrollToPage(targetPage);
-    updatePageIndicator();
-  });
+  // Only scroll when an explicit non-default page was requested (e.g. ?page=5)
+  if (targetPage && targetPage > 1) {
+    requestAnimationFrame(() => {
+      scrollToPage(targetPage);
+      updatePageIndicator();
+    });
+  } else {
+    requestAnimationFrame(updatePageIndicator);
+  }
 
   if (!localStorage.getItem('zoomHintSeen')) {
     showZoomHint();
@@ -671,8 +722,9 @@ async function renderAllPages(targetPage) {
 // ── Get currently visible page number ────────────────
 function getCurrentPage() {
   if (!pdfDoc) return 1;
-  const max  = viewer.scrollWidth - viewer.clientWidth;
-  const pct  = max > 0 ? viewer.scrollLeft / max : 0;
+  const max = viewer.scrollWidth - viewer.clientWidth;
+  const pct = max > 0 ? viewer.scrollLeft / max : 0;
+  // RTL: row-reverse layout; page 1 is rightmost (pct=1), page N is leftmost (pct=0)
   return isRTL
     ? Math.max(1, totalPages - Math.floor(pct * totalPages))
     : Math.max(1, Math.ceil(pct * totalPages) || 1);
@@ -682,21 +734,10 @@ function getCurrentPage() {
 function scrollToPage(pageNum) {
   if (!pdfDoc) return;
   const clampedPage = Math.max(1, Math.min(totalPages, pageNum));
-  // In RTL mode page order is reversed in DOM
-  const domIndex = isRTL ? (totalPages - clampedPage) : (clampedPage - 1);
+  // DOM is always 1→N; offsetLeft already reflects row-reverse positioning for RTL
   const wrappers = pagesContainer.querySelectorAll('.page-wrapper');
-  if (wrappers[domIndex]) {
-    // scrollLeft relative to #viewer considering CSS zoom
-    const wrapper    = wrappers[domIndex];
-    viewer.scrollLeft = wrapper.offsetLeft;  // CSS size is already logical px
-  } else {
-    // Fallback: proportional scroll
-    if (isRTL) {
-      viewer.scrollLeft = viewer.scrollWidth;
-    } else {
-      viewer.scrollLeft = 0;
-    }
-  }
+  const wrapper  = wrappers[clampedPage - 1];
+  viewer.scrollLeft = wrapper ? wrapper.offsetLeft : (isRTL ? viewer.scrollWidth : 0);
 }
 
 // ── Logo click → GitHub ───────────────────────────────
@@ -760,6 +801,8 @@ viewer.addEventListener('wheel', (e) => {
 // ── Mouse drag → velocity tracking ───────────────────
 viewer.addEventListener('mousedown', (e) => {
   if (e.button !== 0) return;
+  // Disable drag while pages are still loading in R-bind (scroll compensation is active)
+  if (isRendering && isRTL) return;
   stopScroll();
   showOverlays(); // user interaction starts
   const now      = performance.now();
@@ -777,8 +820,7 @@ viewer.addEventListener('mousedown', (e) => {
 document.addEventListener('mousemove', (e) => {
   if (!isDragging) return;
   dragSamples.push({ x: e.clientX, t: performance.now() });
-  const dir = isRTL ? -1 : 1;
-  viewer.scrollLeft = dragScrollLeft + (dragStartX - e.clientX) * dir;
+  viewer.scrollLeft = dragScrollLeft + (dragStartX - e.clientX);
   viewer.scrollTop  = dragScrollTop  + (dragStartY - e.clientY);
   updatePageIndicator();
 });
@@ -799,7 +841,7 @@ document.addEventListener('mouseup', () => {
     if (totalDt > 0) {
       const avgVelMs    = (first.x - last.x) / totalDt;
       const avgFrameVel = avgVelMs * (1000 / 60);
-      const finalVel    = avgFrameVel * (isRTL ? -1 : 1);
+      const finalVel    = avgFrameVel;
       if (Math.abs(finalVel) > MIN_VEL) {
         startContinuous(finalVel);
         return;
@@ -814,7 +856,7 @@ document.addEventListener('mouseup', () => {
     const dt    = last.t - first.t;
     if (dt > 0) {
       const frameVel = ((first.x - last.x) / dt) * (1000 / 60);
-      const finalVel = frameVel * (isRTL ? -1 : 1);
+      const finalVel = frameVel;
       if (Math.abs(finalVel) > MIN_VEL) {
         startInertia(finalVel);
       }
@@ -869,6 +911,7 @@ function updatePageIndicator() {
   if (!pdfDoc) return;
   const max  = viewer.scrollWidth - viewer.clientWidth;
   const pct  = max > 0 ? viewer.scrollLeft / max : 0;
+  // RTL: row-reverse layout; page 1 is rightmost (pct=1), page N is leftmost (pct=0)
   const approxPage = isRTL
     ? Math.max(1, totalPages - Math.floor(pct * totalPages))
     : Math.max(1, Math.ceil(pct * totalPages) || 1);
