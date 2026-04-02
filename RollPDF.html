@@ -45,8 +45,12 @@
     display: flex; align-items: center; gap: 6px;
     padding: 0 16px;
     z-index: 100;
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+    scrollbar-width: none;          /* Firefox */
     transition: transform 0.25s cubic-bezier(0.4,0,0.2,1), opacity 0.25s ease;
   }
+  #toolbar::-webkit-scrollbar { display: none; } /* Chrome/Safari */
   body.is-fullscreen #toolbar {
     transform: translateY(-100%);
     opacity: 0;
@@ -89,7 +93,8 @@
     text-overflow: ellipsis; max-width: 220px;
   }
   .tb-info span { color: var(--text); }
-  .tb-spacer { flex: 1; }
+  .tb-spacer { flex-shrink: 0; min-width: 12px; }
+  #direction-label { display: none; }
 
   .btn {
     display: flex; align-items: center; gap: 5px;
@@ -165,6 +170,8 @@
   }
   #viewer.visible  { display: block; }
   #viewer.dragging { cursor: grabbing; }
+  /* Disable native horizontal pan so JS controls horizontal scroll for both touch and mouse */
+  #viewer { touch-action: pan-y pinch-zoom; }
 
   #viewer::-webkit-scrollbar       { height: 4px; width: 4px; }
   #viewer::-webkit-scrollbar-track { background: var(--surface); }
@@ -322,7 +329,6 @@
     <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5">
       <path d="M8 2v12M5 4l3-3 3 3M5 12l3 3 3-3"/>
     </svg>
-    FIT
   </button>
 
 
@@ -333,7 +339,6 @@
     <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5">
       <path d="M2 4h5l2 2h5v8H2z"/>
     </svg>
-    Open
   </button>
 
   <div class="tb-sep"></div>
@@ -408,15 +413,18 @@ let dragStartX     = 0;
 let dragStartY     = 0;
 let dragScrollLeft = 0;
 let dragScrollTop  = 0;
-let dragSamples    = [];   // [{x,t}] — full history for average velocity
-let dragStartTime  = 0;
 let inertiaRAF     = null;
 let isAutoScroll   = false; // continuous scroll active
+
+// Scroll-based velocity tracking (shared by mouse, touch, wheel)
+let scrollSamples   = [];   // [{pos, t}] — scrollLeft samples
+let scrollStopTimer = null; // fires when scrolling pauses
 
 const FRICTION             = 0.92;
 const MIN_VEL              = 0.5;    // px/frame stop threshold
 const VEL_WIN              = 80;     // ms window for instant velocity
-const CONTINUOUS_THRESHOLD = 1000;  // ms: long drag → continuous scroll
+const SCROLL_STOP_DELAY    = 120;    // ms quiet period → gesture ended
+const CONTINUOUS_THRESHOLD = 1000;  // ms: sustained scroll → continuous mode
 
 // ── Overlay auto-hide ─────────────────────────────────
 // Overlays: page numbers + page indicator + scroll indicator
@@ -790,85 +798,119 @@ viewer.addEventListener('wheel', (e) => {
     showZoomHint();
     return;
   }
-  stopScroll();
-  showOverlays(); // user wheel scroll
+  stopActiveScroll(); // stop rAF animation but keep scroll samples accumulating
   const raw = Math.abs(e.deltaX) > Math.abs(e.deltaY) ? e.deltaX : e.deltaY;
   const dir = isRTL ? -1 : 1;
   viewer.scrollLeft += raw * dir * 1.5;
-  updatePageIndicator();
+  // showOverlays() and updatePageIndicator() handled by scroll event listener
 }, { passive: false });
 
-// ── Mouse drag → velocity tracking ───────────────────
+// ── Mouse drag ────────────────────────────────────────
 viewer.addEventListener('mousedown', (e) => {
   if (e.button !== 0) return;
-  // Disable drag while pages are still loading in R-bind (scroll compensation is active)
   if (isRendering && isRTL) return;
-  stopScroll();
-  showOverlays(); // user interaction starts
-  const now      = performance.now();
+  stopScroll(); // new gesture: clear samples + stop animation
+  showOverlays();
   isDragging     = true;
   dragStartX     = e.clientX;
   dragStartY     = e.clientY;
   dragScrollLeft = viewer.scrollLeft;
   dragScrollTop  = viewer.scrollTop;
-  dragStartTime  = now;
-  dragSamples    = [{ x: e.clientX, t: now }];
   viewer.classList.add('dragging');
   e.preventDefault();
 });
 
 document.addEventListener('mousemove', (e) => {
   if (!isDragging) return;
-  dragSamples.push({ x: e.clientX, t: performance.now() });
   viewer.scrollLeft = dragScrollLeft + (dragStartX - e.clientX);
   viewer.scrollTop  = dragScrollTop  + (dragStartY - e.clientY);
-  updatePageIndicator();
+  // scroll event fires automatically → scrollSamples updated
 });
 
 document.addEventListener('mouseup', () => {
   if (!isDragging) return;
   isDragging = false;
   viewer.classList.remove('dragging');
-
-  const now      = performance.now();
-  const duration = now - dragStartTime;
-
-  if (duration >= CONTINUOUS_THRESHOLD && dragSamples.length >= 2) {
-    // Long drag → continuous scroll at average speed
-    const first   = dragSamples[0];
-    const last    = dragSamples[dragSamples.length - 1];
-    const totalDt = last.t - first.t;
-    if (totalDt > 0) {
-      const avgVelMs    = (first.x - last.x) / totalDt;
-      const avgFrameVel = avgVelMs * (1000 / 60);
-      const finalVel    = avgFrameVel;
-      if (Math.abs(finalVel) > MIN_VEL) {
-        startContinuous(finalVel);
-        return;
-      }
-    }
-  }
-
-  // Short drag → inertia with friction decay
-  const recent = dragSamples.filter(s => now - s.t <= VEL_WIN);
-  if (recent.length >= 2) {
-    const first = recent[0], last = recent[recent.length - 1];
-    const dt    = last.t - first.t;
-    if (dt > 0) {
-      const frameVel = ((first.x - last.x) / dt) * (1000 / 60);
-      const finalVel = frameVel;
-      if (Math.abs(finalVel) > MIN_VEL) {
-        startInertia(finalVel);
-      }
-    }
-  }
+  // onScrollStopped() fires via scrollStopTimer after SCROLL_STOP_DELAY
 });
+
+// ── Touch drag ────────────────────────────────────────
+let touchStartX     = 0;
+let touchStartY     = 0;
+let touchScrollLeft = 0;
+let touchScrollTop  = 0;
+
+viewer.addEventListener('touchstart', (e) => {
+  if (e.touches.length !== 1) return;
+  stopScroll(); // new gesture
+  showOverlays();
+  isDragging      = true;
+  touchStartX     = e.touches[0].clientX;
+  touchStartY     = e.touches[0].clientY;
+  touchScrollLeft = viewer.scrollLeft;
+  touchScrollTop  = viewer.scrollTop;
+}, { passive: true });
+
+viewer.addEventListener('touchmove', (e) => {
+  if (!isDragging || e.touches.length !== 1) return;
+  const dx = touchStartX - e.touches[0].clientX;
+  const dy = touchStartY - e.touches[0].clientY;
+  if (Math.abs(dx) > Math.abs(dy)) e.preventDefault(); // block native horizontal scroll
+  viewer.scrollLeft = touchScrollLeft + dx;
+  viewer.scrollTop  = touchScrollTop  + dy;
+}, { passive: false });
+
+viewer.addEventListener('touchend',    () => { if (isDragging) isDragging = false; });
+viewer.addEventListener('touchcancel', () => { isDragging = false; });
+
+// ── Scroll-based velocity tracker (mouse / touch / wheel unified) ─────────
+viewer.addEventListener('scroll', () => {
+  if (isAutoScroll) return; // ignore rAF-driven scroll events
+  showOverlays();
+  updatePageIndicator();
+
+  const now = performance.now();
+  scrollSamples.push({ pos: viewer.scrollLeft, t: now });
+  // Trim samples older than 1.5 s
+  while (scrollSamples.length > 1 && now - scrollSamples[0].t > 1500) scrollSamples.shift();
+
+  clearTimeout(scrollStopTimer);
+  scrollStopTimer = setTimeout(onScrollStopped, SCROLL_STOP_DELAY);
+}, { passive: true });
+
+function onScrollStopped() {
+  if (isAutoScroll || isDragging || scrollSamples.length < 2) {
+    scrollSamples = [];
+    return;
+  }
+  const now = performance.now();
+
+  // Instantaneous velocity from the most recent samples
+  const horizon = VEL_WIN + SCROLL_STOP_DELAY + 20;
+  const recent  = scrollSamples.filter(s => now - s.t <= horizon);
+  let instVel = 0;
+  if (recent.length >= 2) {
+    const a = recent[0], b = recent[recent.length - 1];
+    const dt = b.t - a.t;
+    if (dt > 0) instVel = ((b.pos - a.pos) / dt) * (1000 / 60);
+  }
+
+  const duration = scrollSamples[scrollSamples.length - 1].t - scrollSamples[0].t;
+  scrollSamples = [];
+
+  if (Math.abs(instVel) < MIN_VEL) return;
+  if (duration >= CONTINUOUS_THRESHOLD) {
+    startContinuous(instVel);
+  } else {
+    startInertia(instVel);
+  }
+}
 
 // ── Inertia (friction decay) ──────────────────────────
 function startInertia(vel) {
-  stopScroll();
+  stopActiveScroll();
   isAutoScroll = false;
-  showOverlays(); // show once at inertia start; 3s timer runs independently
+  showOverlays();
   function tick() {
     if (Math.abs(vel) < MIN_VEL) { inertiaRAF = null; return; }
     viewer.scrollLeft += vel;
@@ -883,10 +925,9 @@ function startInertia(vel) {
 let scrollIndicatorTimer = null;
 
 function startContinuous(vel) {
-  stopScroll();
+  stopActiveScroll();
   isAutoScroll = true;
-  showOverlays(); // show overlays at continuous scroll start
-  // Show scroll indicator, auto-hide after 3s
+  showOverlays();
   scrollIndicator.classList.add('visible');
   clearTimeout(scrollIndicatorTimer);
   scrollIndicatorTimer = setTimeout(() => scrollIndicator.classList.remove('visible'), OVERLAY_TIMEOUT);
@@ -901,12 +942,16 @@ function startContinuous(vel) {
   inertiaRAF = requestAnimationFrame(tick);
 }
 
-function stopScroll() {
-  if (inertiaRAF) { cancelAnimationFrame(inertiaRAF); inertiaRAF = null; }
+function stopActiveScroll() {
+  if (inertiaRAF)   { cancelAnimationFrame(inertiaRAF); inertiaRAF = null; }
   if (isAutoScroll) { isAutoScroll = false; scrollIndicator.classList.remove('visible'); clearTimeout(scrollIndicatorTimer); }
 }
 
-// ── Page indicator ────────────────────────────────────
+function stopScroll() {
+  stopActiveScroll();
+  clearTimeout(scrollStopTimer);
+  scrollSamples = [];
+}
 function updatePageIndicator() {
   if (!pdfDoc) return;
   const max  = viewer.scrollWidth - viewer.clientWidth;
@@ -917,7 +962,7 @@ function updatePageIndicator() {
     : Math.max(1, Math.ceil(pct * totalPages) || 1);
   pageIndicator.textContent = `${approxPage} / ${totalPages}`;
 }
-viewer.addEventListener('scroll', updatePageIndicator);
+// Note: updatePageIndicator is called from the unified scroll event listener above
 
 // ── File drag & drop ──────────────────────────────────
 let dragCounter = 0;
