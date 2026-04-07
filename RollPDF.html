@@ -84,13 +84,15 @@
     white-space: nowrap;
     cursor: pointer;
     transition: opacity 0.15s;
+    flex-shrink: 0;
   }
   .tb-logo:hover { opacity: 0.75; }
-  .tb-sep { width: 1px; height: 24px; background: var(--border); margin: 0 6px; }
+  .tb-sep { width: 1px; height: 24px; background: var(--border); margin: 0 6px; flex-shrink: 0; }
   .tb-info {
     color: var(--text-dim); font-size: 11px;
     white-space: nowrap; overflow: hidden;
     text-overflow: ellipsis; max-width: 220px;
+    flex-shrink: 0;
   }
   .tb-info span { color: var(--text); }
   .tb-spacer { flex-shrink: 0; min-width: 12px; }
@@ -105,6 +107,7 @@
     color: var(--text-dim);
     font-family: 'DM Mono', monospace; font-size: 11px;
     cursor: pointer; transition: all 0.15s; white-space: nowrap;
+    flex-shrink: 0;
   }
   .btn:hover  { border-color: var(--amber-dim); color: var(--text); }
   .btn.active { background: var(--amber-glow); border-color: var(--amber); color: var(--amber); }
@@ -117,6 +120,7 @@
     border-radius: var(--radius);
     color: var(--amber); font-size: 11px;
     min-width: 56px; text-align: center;
+    flex-shrink: 0;
   }
 
   /* ── DROP ZONE ───────────────────────────── */
@@ -297,7 +301,7 @@
 <div id="drag-overlay"></div>
 
 <div id="toolbar">
-  <div class="tb-logo" id="tb-logo" title="Open RollPDF on GitHub">▣ RollPDF</div>
+  <div class="tb-logo" id="tb-logo" title="Open RollShelf on GitHub">▣ RollShelf</div>
   <div class="tb-sep"></div>
   <div class="tb-info" id="tb-info">Drop a PDF to open</div>
   <div class="tb-spacer"></div>
@@ -750,7 +754,7 @@ function scrollToPage(pageNum) {
 
 // ── Logo click → GitHub ───────────────────────────────
 document.getElementById('tb-logo').addEventListener('click', () => {
-  window.open('https://github.com/covao/RollPDF', '_blank', 'noopener');
+  window.open('https://github.com/covao/RollShelf', '_blank', 'noopener');
 });
 
 // ── Direction toggle ──────────────────────────────────
@@ -775,12 +779,19 @@ const SCALE_MAX  = 5.0;   // 500% of fit height
 function setScale(v) {
   uiZoom = Math.min(SCALE_MAX, Math.max(SCALE_MIN, v));
   zoomDisplay.textContent = Math.round(uiZoom * 100) + '%';
-  // Instant CSS feedback: approximate zoom relative to current render scale
   if (renderScale > 0) {
+    // Save current scroll ratio before zoom changes scrollWidth
+    const prevMax = viewer.scrollWidth - viewer.clientWidth;
+    const ratio   = prevMax > 0 ? viewer.scrollLeft / prevMax : 0;
+
     pagesContainer.style.zoom = String((fitScale * uiZoom) / renderScale);
+
+    // Restore scroll position after layout updates
+    requestAnimationFrame(() => {
+      const newMax = viewer.scrollWidth - viewer.clientWidth;
+      viewer.scrollLeft = ratio * newMax;
+    });
   }
-  // After zoom settles, silently re-render at exact display resolution
-  // so font strokes are pixel-perfect (not CSS-downscaled bitmaps)
 }
 
 
