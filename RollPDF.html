@@ -624,7 +624,24 @@ async function applyFitHeight() {
     zoomDisplay.textContent = '100%';
     if (pagesContainer.children.length > 0) {
       // Instant CSS feedback
-      if (renderScale > 0) pagesContainer.style.zoom = String(fitScale / renderScale);
+      if (renderScale > 0) {
+        // Save current scroll ratio before the zoom change alters scrollWidth
+        // (same approach as setScale — without this, changing zoom shifts what
+        // is visible: harmless for L-bind, where page 1 sits at scrollLeft 0,
+        // but for R-bind, where page 1 is pinned to the *right* edge via an
+        // absolute scrollLeft, that value goes stale and a different page ends
+        // up on screen).
+        const prevMax = viewer.scrollWidth - viewer.clientWidth;
+        const ratio   = prevMax > 0 ? viewer.scrollLeft / prevMax : 0;
+
+        pagesContainer.style.zoom = String(fitScale / renderScale);
+
+        // Restore scroll position after layout updates
+        requestAnimationFrame(() => {
+          const newMax = viewer.scrollWidth - viewer.clientWidth;
+          viewer.scrollLeft = ratio * newMax;
+        });
+      }
       // Then re-render at exact fit resolution
     }
   } catch (e) { console.error('fitHeight:', e); }
